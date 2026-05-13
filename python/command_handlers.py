@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # ==============================================================================
-# command_handlers.py – Version 1.9.0 (force window size on tab switch)
+# command_handlers.py – Version 1.10.0 (send_keys for decode, humantype added, text removed)
 # ==============================================================================
-import os, time, subprocess, glob, shutil, re, tempfile
+import os, time, subprocess, glob, shutil, re, tempfile, random
 from uploader import reassemble
 from upload_handler import perform_upload
 from upload_injector import upload_to_youtube
@@ -75,11 +75,6 @@ def execute_one_command(
     elif cmd == "wait":        time.sleep(arg / 1000.0); result = f"OK wait({arg}ms)"
     elif cmd == "key":         press_key(arg); result = f"OK key({arg})"
     elif cmd == "combo":       press_combo(arg); result = f"OK combo({arg})"
-    elif cmd == "text":
-        driver.execute_script("arguments[0].value += arguments[1];",
-                              driver.switch_to.active_element, arg)
-        safe = arg[:30] + ("…" if len(arg) > 30 else "")
-        result = f"OK text({safe})"
     elif cmd == "secret":
         ok = type_secret(arg)
         result = f"OK secret({arg})" if ok else f"ERR secret({arg})"
@@ -87,9 +82,24 @@ def execute_one_command(
         plain = decode_string(arg, KEY_SECRET)
         if plain is None: result = "ERR decode"
         else:
-            driver.execute_script("arguments[0].value += arguments[1];",
-                                  driver.switch_to.active_element, plain)
-            result = "OK decode"
+            try:
+                elem = driver.switch_to.active_element
+                elem.send_keys(plain)
+                result = "OK decode"
+            except Exception as e:
+                result = f"ERR decode: {e}"
+    elif cmd == "humantype":
+        plain = decode_string(arg, KEY_SECRET)
+        if plain is None: result = "ERR humantype"
+        else:
+            try:
+                elem = driver.switch_to.active_element
+                for ch in plain:
+                    elem.send_keys(ch)
+                    time.sleep(random.uniform(0.03, 0.12))
+                result = "OK humantype"
+            except Exception as e:
+                result = f"ERR humantype: {e}"
     elif cmd == "navigate":
         driver.get(arg); time.sleep(4)
         current_url = driver.current_url
@@ -194,20 +204,15 @@ def execute_one_command(
             if not handles: result = "ERR tabnumber: no window handles"
             elif 0 <= idx < len(handles):
                 driver.switch_to.window(handles[idx])
-                # Force this window to the standard viewport size
-                try:
-                    driver.set_window_size(W, H)
-                except Exception:
-                    pass
+                try: driver.set_window_size(W, H)
+                except Exception: pass
                 result = f"Switched to tab {idx+1}: {driver.title[:40]}"
             else:
                 time.sleep(0.5); handles = driver.window_handles
                 if 0 <= idx < len(handles):
                     driver.switch_to.window(handles[idx])
-                    try:
-                        driver.set_window_size(W, H)
-                    except Exception:
-                        pass
+                    try: driver.set_window_size(W, H)
+                    except Exception: pass
                     result = f"Switched to tab {idx+1}: {driver.title[:40]}"
                 else: result = "ERR: invalid tab number"
         except Exception as e: result = f"ERR tabnumber: {e}"
