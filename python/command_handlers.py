@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ==============================================================================
-# command_handlers.py – Version 1.10.0 (send_keys for decode, humantype added, text removed)
+# command_handlers.py – Version 1.10.1 (smart scroll inside active element)
 # ==============================================================================
 import os, time, subprocess, glob, shutil, re, tempfile, random
 from uploader import reassemble
@@ -8,7 +8,6 @@ from upload_handler import perform_upload
 from upload_injector import upload_to_youtube
 
 def _ensure_selection(_file_registry, _upload_file_paths):
-    """If no file is selected but files exist, select the first one (lowest ID)."""
     if not _upload_file_paths and _file_registry:
         first_id = min(_file_registry.keys())
         _upload_file_paths.append(_file_registry[first_id])
@@ -70,8 +69,27 @@ def execute_one_command(
     elif cmd == "rightshoot":  right_click();  result = "OK rightclick"
     elif cmd == "middleshoot": middle_click(); result = "OK middleclick"
     elif cmd == "scroll":
-        scroll_by(arg); direction = "down" if arg >= 0 else "up"
-        result = f"OK scroll({direction},{abs(arg)})"
+        amount = int(arg)
+        direction = "down" if amount >= 0 else "up"
+        # Try to scroll inside the currently active / focused element first
+        try:
+            elem = driver.switch_to.active_element
+            if elem:
+                # Check if the element has a scrollable overflow
+                scroll_height = driver.execute_script("return arguments[0].scrollHeight;", elem)
+                client_height = driver.execute_script("return arguments[0].clientHeight;", elem)
+                if scroll_height > client_height:
+                    driver.execute_script("arguments[0].scrollBy(0, arguments[1]);", elem, amount)
+                    result = f"OK scroll({direction},{abs(amount)}) [inside element]"
+                else:
+                    driver.execute_script(f"window.scrollBy(0, {amount});")
+                    result = f"OK scroll({direction},{abs(amount)}) [window]"
+            else:
+                driver.execute_script(f"window.scrollBy(0, {amount});")
+                result = f"OK scroll({direction},{abs(amount)}) [window]"
+        except Exception:
+            driver.execute_script(f"window.scrollBy(0, {amount});")
+            result = f"OK scroll({direction},{abs(amount)}) [window]"
     elif cmd == "wait":        time.sleep(arg / 1000.0); result = f"OK wait({arg}ms)"
     elif cmd == "key":         press_key(arg); result = f"OK key({arg})"
     elif cmd == "combo":       press_combo(arg); result = f"OK combo({arg})"
