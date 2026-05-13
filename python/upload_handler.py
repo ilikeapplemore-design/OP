@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ==============================================================================
-# upload_handler.py – Version 2.0.6 (flat reassembly, batch‑like concat, logging)
+# upload_handler.py – Version 2.0.7 (no file renaming, keep original names)
 # ==============================================================================
 import os, re, shutil, tempfile, time, json, threading, subprocess
 from urllib.request import urlopen, Request
@@ -59,7 +59,7 @@ def perform_upload(DOWNLOAD_DIR, LOG_FILENAME,
                    git_push_with_retry,
                    inject_file_fn,
                    log_func=None):
-    """Pull latest chunks, flat‑reassemble (like batch file), rename, auto‑select."""
+    """Pull latest chunks, flat‑reassemble (like batch file), keep original names."""
     chunks_source = "chunks"
 
     # ── Pull latest repo to get newly pushed chunks ──
@@ -86,7 +86,6 @@ def perform_upload(DOWNLOAD_DIR, LOG_FILENAME,
     # Group by base name (everything before .partNNNN)
     groups = {}
     for f in chunk_files:
-        # match filename up to .part followed by digits
         m = re.match(r"(.+)\.part\d+$", f)
         if m:
             base = m.group(1)
@@ -119,7 +118,7 @@ def perform_upload(DOWNLOAD_DIR, LOG_FILENAME,
         if count == 0:
             return "ERR upload: reassembly produced no files"
 
-        # ── Verify assembled file sizes ──
+        # ── Verify assembled file sizes (optional, but helpful) ──
         for base, expected_size in total_sizes.items():
             assembled_path = os.path.join(DOWNLOAD_DIR, base)
             if os.path.isfile(assembled_path):
@@ -134,20 +133,8 @@ def perform_upload(DOWNLOAD_DIR, LOG_FILENAME,
                 if log_func:
                     log_func(f"❌ Missing assembled file: {base}")
 
-        # ── Rename files to safe numeric names (1.ext, 2.ext, ...) ──
-        renamed_map = {}
-        seq = 1
-        for base in groups:
-            orig_path = os.path.join(DOWNLOAD_DIR, base)
-            if os.path.isfile(orig_path):
-                _, ext = os.path.splitext(base)
-                new_name = f"{seq}{ext}"
-                new_path = os.path.join(DOWNLOAD_DIR, new_name)
-                os.rename(orig_path, new_path)
-                renamed_map[base] = new_name
-                if log_func:
-                    log_func(f"  Renamed: {base} → {new_name}")
-                seq += 1
+        # ===== NO FILE RENAMING – keep original names =====
+        # (The renaming block that produced 1.ext, 2.ext has been removed.)
 
         # ── Refresh file registry (this also sends "Files:" report) ──
         refresh_file_registry()
@@ -155,10 +142,10 @@ def perform_upload(DOWNLOAD_DIR, LOG_FILENAME,
         if log_func:
             log_func(f"File registry after refresh: {_file_registry}")
 
-        # ── Auto‑select newly assembled file(s) ──
+        # ── Auto‑select newly assembled file(s) based on original names ──
         new_ids = []
         for fid, fname in _file_registry.items():
-            if fname in renamed_map.values():
+            if fname in groups:   # original base name matches
                 new_ids.append(fid)
         if new_ids:
             _upload_file_paths.clear()
@@ -166,6 +153,8 @@ def perform_upload(DOWNLOAD_DIR, LOG_FILENAME,
             _upload_file_paths.extend([_file_registry[fid] for fid in sorted_ids])
             add_autonomous_report("selectfiles",
                                   f"selectfiles({','.join(str(i) for i in sorted_ids)})")
+            if log_func:
+                log_func(f"Auto‑selected file IDs: {sorted_ids}")
         else:
             # Fallback: select the first file in the registry
             if _file_registry:
@@ -174,7 +163,7 @@ def perform_upload(DOWNLOAD_DIR, LOG_FILENAME,
                 _upload_file_paths.append(_file_registry[first_id])
                 add_autonomous_report("selectfiles", f"selectfiles({first_id})")
                 if log_func:
-                    log_func("No renamed files matched – auto-selected first file.")
+                    log_func("No newly assembled files matched – auto-selected first file.")
 
         return f"OK upload({count} files) (ready – use 'uploadtoyoutube')"
     except Exception as e:
