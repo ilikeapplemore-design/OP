@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # ==============================================================================
-# command_handlers.py – Version 1.10.1 (smart scroll inside active element)
+# command_handlers.py – Version 1.11.0
+#   - Scroll targets the element under the cursor first
+#   - Navigate does not block on downloadable files (uses location.href)
 # ==============================================================================
 import os, time, subprocess, glob, shutil, re, tempfile, random
 from uploader import reassemble
@@ -11,6 +13,40 @@ def _ensure_selection(_file_registry, _upload_file_paths):
     if not _upload_file_paths and _file_registry:
         first_id = min(_file_registry.keys())
         _upload_file_paths.append(_file_registry[first_id])
+
+def _scroll_element_or_window(driver, amount, cursor_x, cursor_y):
+    """
+    Scroll the element under the cursor if it has a scrollable overflow,
+    otherwise scroll the active element, and finally fall back to the window.
+    """
+    direction = "down" if amount >= 0 else "up"
+    # 1. Try the element under the cursor
+    try:
+        elem = driver.execute_script(
+            "return document.elementFromPoint(arguments[0], arguments[1]);",
+            cursor_x, cursor_y)
+        if elem:
+            sh = driver.execute_script("return arguments[0].scrollHeight;", elem)
+            ch = driver.execute_script("return arguments[0].clientHeight;", elem)
+            if sh > ch:
+                driver.execute_script("arguments[0].scrollBy(0, arguments[1]);", elem, amount)
+                return f"OK scroll({direction},{abs(amount)}) [under cursor]"
+    except Exception:
+        pass
+    # 2. Try the active element
+    try:
+        elem = driver.switch_to.active_element
+        if elem:
+            sh = driver.execute_script("return arguments[0].scrollHeight;", elem)
+            ch = driver.execute_script("return arguments[0].clientHeight;", elem)
+            if sh > ch:
+                driver.execute_script("arguments[0].scrollBy(0, arguments[1]);", elem, amount)
+                return f"OK scroll({direction},{abs(amount)}) [active element]"
+    except Exception:
+        pass
+    # 3. Fall back to window
+    driver.execute_script(f"window.scrollBy(0, {amount});")
+    return f"OK scroll({direction},{abs(amount)}) [window]"
 
 def execute_one_command(
     cmd, arg,
@@ -69,27 +105,7 @@ def execute_one_command(
     elif cmd == "rightshoot":  right_click();  result = "OK rightclick"
     elif cmd == "middleshoot": middle_click(); result = "OK middleclick"
     elif cmd == "scroll":
-        amount = int(arg)
-        direction = "down" if amount >= 0 else "up"
-        # Try to scroll inside the currently active / focused element first
-        try:
-            elem = driver.switch_to.active_element
-            if elem:
-                # Check if the element has a scrollable overflow
-                scroll_height = driver.execute_script("return arguments[0].scrollHeight;", elem)
-                client_height = driver.execute_script("return arguments[0].clientHeight;", elem)
-                if scroll_height > client_height:
-                    driver.execute_script("arguments[0].scrollBy(0, arguments[1]);", elem, amount)
-                    result = f"OK scroll({direction},{abs(amount)}) [inside element]"
-                else:
-                    driver.execute_script(f"window.scrollBy(0, {amount});")
-                    result = f"OK scroll({direction},{abs(amount)}) [window]"
-            else:
-                driver.execute_script(f"window.scrollBy(0, {amount});")
-                result = f"OK scroll({direction},{abs(amount)}) [window]"
-        except Exception:
-            driver.execute_script(f"window.scrollBy(0, {amount});")
-            result = f"OK scroll({direction},{abs(amount)}) [window]"
+        result = _scroll_element_or_window(driver, int(arg), cursor_x, cursor_y)
     elif cmd == "wait":        time.sleep(arg / 1000.0); result = f"OK wait({arg}ms)"
     elif cmd == "key":         press_key(arg); result = f"OK key({arg})"
     elif cmd == "combo":       press_combo(arg); result = f"OK combo({arg})"
@@ -119,7 +135,9 @@ def execute_one_command(
             except Exception as e:
                 result = f"ERR humantype: {e}"
     elif cmd == "navigate":
-        driver.get(arg); time.sleep(4)
+        # Use location.href to avoid blocking on downloads
+        driver.execute_script("window.location.href = arguments[0];", arg)
+        time.sleep(1.5)   # give the browser a moment to start the request
         current_url = driver.current_url
         result = f"OK navigate({current_url})"
         add_autonomous_report("navigate", f"navigate({current_url})")
