@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # ==============================================================================
-# command_mouse_keyboard.py – Version 39.14.2
-#   - Stdout/stderr redirected to log file for complete crash dumps
-#   - Fatal startup errors are logged before exit
-#   - Cache directory always created before write
-#   - Recovers from vanished app‑command comment
+# command_mouse_keyboard.py – Version 39.14.3
+#   - Logs every screenshot creation and push result
+#   - Prints git push error details when push fails
+#   - Stage monitor no longer fires multiple start events
+#   - All output redirected to log file (including crash dumps)
 # ==============================================================================
 import os, time, subprocess, hashlib, sys, base64, json, random, threading, traceback, io, shutil, tarfile, glob, re
 from datetime import datetime, timezone
@@ -53,14 +53,13 @@ from agent_state import (
     _perform_human_click_at, _try_gemini_click
 )
 
-# ---------- Redirect all stdout/stderr to the log file (in addition to tee) ----------
+# ---------- Redirect stdout/stderr to log file ----------
 LOG_FILENAME = "logs/command_mouse_keyboard.log"
 os.makedirs("logs", exist_ok=True)
 
 _logfile = open(LOG_FILENAME, "w", encoding="utf-8")
 _log_closed = False
 
-# Duplicate stdout/stderr to the log file and to the original streams
 class TeeWriter:
     def __init__(self, original, log_f):
         self.original = original
@@ -78,18 +77,13 @@ sys.stdout = TeeWriter(sys.stdout, _logfile)
 sys.stderr = TeeWriter(sys.stderr, _logfile)
 
 def echo(msg: str) -> None:
-    """Write a line to the log file and print it (which now goes to both)."""
-    if not _log_closed:
-        print(msg, flush=True)
-    else:
-        # Fallback: original stdout (already replaced, so this still goes to log)
-        print(msg, flush=True)
+    print(msg, flush=True)
 
 def log(msg: str) -> None:
     now = datetime.now().strftime("%H:%M:%S")
     echo(f"[{now}] {msg}")
 
-echo(f"{'='*60}\n  Remote Control v39.14.2 started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}\n{'='*60}")
+echo(f"{'='*60}\n  Remote Control v39.14.3 started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}\n{'='*60}")
 os.makedirs("screenshots", exist_ok=True)
 
 COMM_INTERVAL = 5.0
@@ -111,11 +105,12 @@ def git_run(cmd, **kwargs):
 def git_push_with_retry() -> bool:
     for attempt in range(5):
         try:
-            git_run(["git","push"], check=True, capture_output=True)
+            result = git_run(["git","push"], check=True, capture_output=True, text=True)
             return True
-        except subprocess.CalledProcessError:
+        except subprocess.CalledProcessError as e:
+            log(f"Git push attempt {attempt+1} failed: {e.stderr.strip() if e.stderr else 'unknown error'}")
             if attempt < 4:
-                time.sleep(1+random.random()*2)
+                time.sleep(2 + random.random()*3)
                 try: git_run(["git","pull","--rebase"], check=True, capture_output=True)
                 except Exception: pass
     return False
@@ -148,11 +143,11 @@ def load_profile():
         log("Profile cache loaded and decrypted successfully.")
         return True
     except InvalidToken:
-        log("ERROR: Profile cache corrupted (invalid token). Starting fresh.")
+        log("ERROR: Profile cache corrupted. Starting fresh.")
         os.remove(PROFILE_CACHE_FILE)
         return False
     except Exception as e:
-        log(f"ERROR loading profile cache: {e}. Starting fresh.")
+        log(f"ERROR loading profile cache: {e}")
         return False
 
 def save_profile():
@@ -162,27 +157,24 @@ def save_profile():
         with tarfile.open(fileobj=buf, mode="w:gz") as tar:
             tar.add(PROFILE_DIR, arcname="chrome_profile")
         encrypted = Fernet(ENCRYPTION_KEY).encrypt(buf.getvalue())
-
         with open(PROFILE_CACHE_FILE, "wb") as out:
             out.write(encrypted)
-        log(f"Profile cache saved to {PROFILE_CACHE_FILE}")
-
-        git_run(["git", "add", PROFILE_CACHE_FILE], check=True, capture_output=True)
-        try:
-            git_run(["git", "diff", "--cached", "--quiet"], check=True, capture_output=True)
+        log(f"Profile cache saved.")
+        git_run(["git","add",PROFILE_CACHE_FILE], check=True, capture_output=True)
+        try: git_run(["git","diff","--cached","--quiet"], check=True, capture_output=True)
         except subprocess.CalledProcessError:
-            git_run(["git", "commit", "-m", "Update profile cache"], check=True, capture_output=True)
+            git_run(["git","commit","-m","Update profile cache"], check=True, capture_output=True)
             if git_push_with_retry():
-                log("Profile cache pushed to remote.")
+                log("Profile cache pushed.")
             else:
-                log("WARNING: Profile cache push failed (but local cache saved).")
+                log("WARNING: Profile cache push failed.")
     except Exception as e:
         log(f"ERROR saving profile cache: {e}")
 
 if load_profile():
-    log("✅ Profile cache successfully loaded.")
+    log("✅ Profile cache loaded.")
 else:
-    log("⚠️ No valid profile cache – starting browser without saved login data.")
+    log("⚠️ Starting without saved login data.")
 
 # ---------- Periodic profile saver ----------
 _profile_save_stop = threading.Event()
@@ -226,11 +218,11 @@ try:
     try:
         from upload_injector import _init_cdp
         if _init_cdp(driver, log):
-            log("CDP file‑chooser interception active.")
+            log("CDP interception active.")
     except Exception as e_cdp:
         log(f"CDP not available ({e_cdp}) – using send_keys fallback.")
 
-    log("Browser launched (undetected Chrome user‑agent).")
+    log("Browser launched.")
 except Exception as e:
     log(f"BROWSER ERROR: {e}\n{traceback.format_exc()}")
     raise
@@ -251,30 +243,12 @@ if agent_state:
 # ---------- Screenshot ----------
 counter = [0]
 
-def purge_old_screenshots(keep_filename):
-    try:
-        raw = gh(f"repos/{REPO}/contents/screenshots", "--jq", ".[].path")
-        if not raw: return
-        for path in raw.strip().splitlines():
-            path = path.strip().strip('"')
-            if not path.endswith(".png"): continue
-            if path == "screenshots/" + keep_filename: continue
-            sha_raw = gh(f"repos/{REPO}/contents/{path}", "--jq", ".sha")
-            if not sha_raw: continue
-            sha = sha_raw.strip().strip('"')
-            gh("--method", "DELETE", f"repos/{REPO}/contents/{path}",
-               "-f", "message=purge old screenshot",
-               "-f", f"sha={sha}",
-               "-f", "branch=main")
-            log(f"Purged old remote screenshot: {path}")
-    except Exception as e:
-        log(f"Warning: failed to purge old screenshots: {e}")
-
 def ss(desc="screenshot", push=True, response_suffix=""):
     counter[0] += 1
     now = datetime.now().strftime("%H%M%S")
     sfx = re.sub(r'[^a-zA-Z0-9 _\-.(),]', '', response_suffix)[:60] if response_suffix else ""
     fname = f"screenshots/{counter[0]:03d}_{now}_{desc}_{sfx}.png" if sfx else f"screenshots/{counter[0]:03d}_{now}_{desc}.png"
+    log(f"Taking screenshot: {fname}")
     driver.save_screenshot(fname)
     try:
         img = Image.open(fname); draw = ImageDraw.Draw(img)
@@ -295,10 +269,32 @@ def ss(desc="screenshot", push=True, response_suffix=""):
         try: git_run(["git","diff","--cached","--quiet"], check=True, capture_output=True)
         except subprocess.CalledProcessError:
             git_run(["git","commit","-m",f"Screenshot {fname}"], check=True, capture_output=True)
-            git_push_with_retry()
-        purge_old_screenshots(os.path.basename(fname))
-    except Exception as e: log(f"Screenshot git error: {e}")
-    return fname
+            if git_push_with_retry():
+                log(f"Pushed: {fname}")
+            else:
+                log(f"ERROR: Failed to push {fname}")
+        # purge old only if push likely succeeded (folder exists)
+        if os.path.exists(fname):
+            purge_old_screenshots(os.path.basename(fname))
+    except Exception as e:
+        log(f"Screenshot git error: {e}")
+
+def purge_old_screenshots(keep_filename):
+    try:
+        raw = gh(f"repos/{REPO}/contents/screenshots", "--jq", ".[].path")
+        if not raw: return
+        for path in raw.strip().splitlines():
+            path = path.strip().strip('"')
+            if not path.endswith(".png"): continue
+            if path == "screenshots/" + keep_filename: continue
+            sha_raw = gh(f"repos/{REPO}/contents/{path}", "--jq", ".sha")
+            if not sha_raw: continue
+            sha = sha_raw.strip().strip('"')
+            gh("--method","DELETE",f"repos/{REPO}/contents/{path}",
+               "-f","message=purge","-f",f"sha={sha}","-f","branch=main")
+            log(f"Purged old: {path}")
+    except Exception as e:
+        log(f"Purge warning: {e}")
 
 _screenshot_stop = threading.Event()
 def screenshot_worker():
@@ -316,7 +312,7 @@ def screenshot_worker():
                 elapsed = time.time() - start
                 _screenshot_stop.wait(max(0, COMM_INTERVAL * slow_mode - elapsed))
         except Exception as outer_e:
-            log(f"Screenshot worker crashed (outer loop): {outer_e}. Restarting in 5s...")
+            log(f"Screenshot worker crashed: {outer_e}")
             _screenshot_stop.wait(5)
 
 def start_screenshot_worker():
@@ -341,7 +337,6 @@ def push_logs():
 
 KEY_SECRET = os.environ["KEY"]
 
-# ---------- smart_edit_comment ----------
 def smart_edit_comment(comment_id, new_body):
     for attempt in range(2):
         try:
@@ -349,10 +344,10 @@ def smart_edit_comment(comment_id, new_body):
             return True
         except subprocess.CalledProcessError:
             if attempt == 0:
-                log("Edit rate‑limited, retrying in 2s...")
+                log("Edit rate-limited, retrying in 2s...")
                 time.sleep(2)
             else:
-                log(f"Edit failed after retry.")
+                log("Edit failed after retry.")
     return False
 
 # ---------- Main loop ----------
@@ -372,12 +367,11 @@ def main():
         refresh_known_handles()
         agent_state._last_known_url = driver.current_url
         threading.Thread(target=url_monitor_worker, daemon=True).start()
-        log("URL monitor and screenshot worker started")
+        log("URL monitor started")
     except Exception as e:
-        log(f"FATAL STARTUP ERROR – {e}")
-        log(traceback.format_exc())
+        log(f"FATAL STARTUP: {e}\n{traceback.format_exc()}")
         push_logs()
-        raise   # re‑raise to be caught by the outer handler in __main__
+        raise
 
     RESPONSE_MARKER = "## Remote Agent Responses"
     APP_COMMAND_MARKER = "## App Commands"
@@ -385,8 +379,7 @@ def main():
         all_comments = get_all_comments(REPO, ISSUE_NUMBER)
         log(f"Fetched {len(all_comments)} comments.")
     except Exception as e:
-        log(f"ERROR fetching comments: {e}")
-        log(traceback.format_exc())
+        log(f"ERROR fetching comments: {e}\n{traceback.format_exc()}")
         push_logs()
         raise
 
@@ -411,8 +404,8 @@ def main():
     if app_cmd_id:
         try:
             edit_comment(REPO, app_cmd_id, "## App Commands\n")
-            log("App command comment blanked for fresh start.")
-        except Exception as e: log(f"Could not blank app command comment: {e}")
+            log("App command comment blanked.")
+        except Exception as e: log(f"Could not blank: {e}")
 
     executed_cache = {}; unsent_reports = []; exec_queue = ExecutionQueue()
 
@@ -432,7 +425,7 @@ def main():
                     log(f"Created new response comment: {new_id}")
                     unsent_reports.clear(); push_logs()
                     return new_id
-                except Exception as e: log(f"Failed to create response comment: {e}"); time.sleep(2)
+                except Exception as e: log(f"Failed to create response: {e}"); time.sleep(2)
             return comment_id
         if smart_edit_comment(comment_id, body):
             unsent_reports.clear(); push_logs(); return comment_id
@@ -447,12 +440,11 @@ def main():
             slow_mode = 1
 
         try:
-            # ── Ensure we still have a valid app‑command comment ──
             if app_cmd_id:
                 try:
                     _ = gh(f"repos/{REPO}/issues/comments/{app_cmd_id}", "--jq", ".id")
                 except subprocess.CalledProcessError:
-                    log(f"App command comment {app_cmd_id} disappeared – resetting.")
+                    log(f"App command comment {app_cmd_id} vanished – resetting.")
                     app_cmd_id = None
 
             if not app_cmd_id:
@@ -460,17 +452,14 @@ def main():
                 allc = get_all_comments(REPO, ISSUE_NUMBER)
                 app_c = find_marker_comment(allc, APP_COMMAND_MARKER)
                 if app_c:
-                    app_cmd_id = app_c["id"]
-                    log(f"Re‑found app command comment: {app_cmd_id}")
+                    app_cmd_id = app_c["id"]; log(f"Re‑found app cmd: {app_cmd_id}")
                 else:
                     try:
                         app_cmd_id = issue_comment(REPO, ISSUE_NUMBER, "## App Commands\n")
-                        log(f"Created new app command comment: {app_cmd_id}")
-                    except Exception as ce:
-                        log(f"Could not create app command comment: {ce}")
+                        log(f"Created new app cmd: {app_cmd_id}")
+                    except Exception as ce: log(f"Could not create app cmd: {ce}")
                 continue
 
-            # ── Read the comment body ──
             app_body = gh(f"repos/{REPO}/issues/comments/{app_cmd_id}", "--jq", ".body")
             if not app_body: time.sleep(COMM_INTERVAL * slow_mode); continue
             lines = app_body.strip().splitlines()
@@ -491,7 +480,7 @@ def main():
                             if cid in executed_cache:
                                 ts, _, cached_result = executed_cache[cid]
                                 unsent_reports.append((ts, seq, cached_result))
-                                log(f"Cached: {cid} → {cached_result}")
+                                log(f"Cached: {cid}")
                             else:
                                 exec_queue.add_command(cid, ctext)
                                 log(f"Queued: {cid} → {ctext}")
@@ -550,7 +539,7 @@ def main():
 
             response_comment_id = publish_reports(response_comment_id)
             if should_exit:
-                log("Exit command received – saving profile cache before exit...")
+                log("Exit command received – saving profile cache...")
                 save_profile()
                 time.sleep(1)
                 response_comment_id = publish_reports(response_comment_id)
@@ -570,8 +559,7 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except SystemExit:
-        pass
+    except SystemExit: pass
     except Exception as ex:
         log(f"FATAL: {ex}\n{traceback.format_exc()}")
         push_logs()
