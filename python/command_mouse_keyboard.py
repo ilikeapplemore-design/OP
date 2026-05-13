@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 # ==============================================================================
-# command_mouse_keyboard.py – Version 39.14.0
-#   - Robust exit sequence: saves cache, pushes final screenshot, stops all workers
-#   - Profile cache always encrypted with KEY (Fernet), auto‑saved every 5 minutes
-#   - Screenshot worker continuously pushes; no missing screenshots
-#   - All existing commands preserved (tab, file, upload, save, …)
+# command_mouse_keyboard.py – Version 39.14.1
+#   - Always create .profile_cache directory before saving cache
+#   - Recover gracefully when the app-command comment disappears
 # ==============================================================================
 import os, time, subprocess, hashlib, sys, base64, json, random, threading, traceback, io, shutil, tarfile, glob, re
 from datetime import datetime, timezone
@@ -94,17 +92,16 @@ def log(msg: str) -> None:
     now = datetime.now().strftime("%H:%M:%S")
     echo(f"[{now}] {msg}")
 
-echo(f"{'='*60}\n  Remote Control v39.14.0 started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}\n{'='*60}")
+echo(f"{'='*60}\n  Remote Control v39.14.1 started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}\n{'='*60}")
 os.makedirs("screenshots", exist_ok=True)
 
 COMM_INTERVAL = 5.0
-# Speed factor: 1 normally, 15 when idle > 2 mins
 slow_mode = 1
 last_command_time = time.time()
 
 # ---------- Persistent encrypted profile cache (single file in repo) ----------
 PROFILE_DIR = "/tmp/chrome_profile"
-PROFILE_CACHE_FILE = ".profile_cache/profile.enc"       # single file inside repo
+PROFILE_CACHE_FILE = ".profile_cache/profile.enc"
 ENCRYPTION_KEY = None
 try:
     KEY = os.environ["KEY"]
@@ -113,6 +110,7 @@ except Exception as e:
     log(f"PROFILE KEY ERROR: {e}")
     raise
 
+# Ensure cache directory exists at startup
 os.makedirs(os.path.dirname(PROFILE_CACHE_FILE), exist_ok=True)
 
 def load_profile():
@@ -124,9 +122,7 @@ def load_profile():
         with open(PROFILE_CACHE_FILE, "rb") as f:
             encrypted = f.read()
         decrypted = Fernet(ENCRYPTION_KEY).decrypt(encrypted)
-        # Remove existing profile dir
         shutil.rmtree(PROFILE_DIR, ignore_errors=True)
-        # Extract archive
         buf = io.BytesIO(decrypted)
         with tarfile.open(fileobj=buf, mode='r:gz') as tar:
             tar.extractall('/tmp')
@@ -134,7 +130,7 @@ def load_profile():
         return True
     except InvalidToken:
         log("ERROR: Profile cache corrupted (invalid token). Starting fresh.")
-        os.remove(PROFILE_CACHE_FILE)   # remove broken file
+        os.remove(PROFILE_CACHE_FILE)
         return False
     except Exception as e:
         log(f"ERROR loading profile cache: {e}. Starting fresh.")
@@ -142,19 +138,18 @@ def load_profile():
 
 def save_profile():
     """Tar+gz profile dir, encrypt, write to single cache file, commit, and push."""
+    # Ensure the parent directory exists before writing
+    os.makedirs(os.path.dirname(PROFILE_CACHE_FILE), exist_ok=True)
     try:
-        # Create archive in memory
         buf = io.BytesIO()
         with tarfile.open(fileobj=buf, mode="w:gz") as tar:
             tar.add(PROFILE_DIR, arcname="chrome_profile")
         encrypted = Fernet(ENCRYPTION_KEY).encrypt(buf.getvalue())
 
-        # Write to the single file
         with open(PROFILE_CACHE_FILE, "wb") as out:
             out.write(encrypted)
         log(f"Profile cache saved to {PROFILE_CACHE_FILE}")
 
-        # Commit and push the updated cache file
         git_run(["git", "add", PROFILE_CACHE_FILE], check=True, capture_output=True)
         try:
             git_run(["git", "diff", "--cached", "--quiet"], check=True, capture_output=True)
@@ -177,7 +172,7 @@ else:
 _profile_save_stop = threading.Event()
 def periodic_save_worker():
     while not _profile_save_stop.is_set():
-        _profile_save_stop.wait(300)   # 5 minutes
+        _profile_save_stop.wait(300)
         if not _profile_save_stop.is_set():
             log("Periodic profile save triggered.")
             save_profile()
@@ -241,7 +236,6 @@ if agent_state:
 counter = [0]
 
 def purge_old_screenshots(keep_filename):
-    """Delete all remote screenshots except the one just pushed."""
     try:
         raw = gh(f"repos/{REPO}/contents/screenshots", "--jq", ".[].path")
         if not raw: return
@@ -292,7 +286,6 @@ def ss(desc="screenshot", push=True, response_suffix=""):
 
 _screenshot_stop = threading.Event()
 def screenshot_worker():
-    """Worker that continuously takes screenshots, with auto‑restart on crash."""
     while not _screenshot_stop.is_set():
         try:
             time.sleep(2)
@@ -302,7 +295,6 @@ def screenshot_worker():
                     ss("auto", push=True)
                 except Exception as e:
                     log(f"Screenshot worker error: {e}")
-                    # Don't exit the loop; keep trying after a short delay
                     time.sleep(5)
                     continue
                 elapsed = time.time() - start
@@ -311,7 +303,6 @@ def screenshot_worker():
             log(f"Screenshot worker crashed (outer loop): {outer_e}. Restarting in 5s...")
             _screenshot_stop.wait(5)
 
-# Start screenshot worker in a daemon thread with watchdog
 def start_screenshot_worker():
     t = threading.Thread(target=screenshot_worker, daemon=True)
     t.start()
@@ -365,7 +356,6 @@ def main():
         refresh_known_handles()
         agent_state._last_known_url = driver.current_url
         threading.Thread(target=url_monitor_worker, daemon=True).start()
-        # screenshot worker already started
         log("URL monitor and screenshot worker started")
     except Exception as e: log(f"FATAL STARTUP ERROR – {e}"); push_logs(); raise
 
@@ -429,13 +419,30 @@ def main():
             slow_mode = 1
 
         try:
+            # ── Ensure we still have a valid app‑command comment ──
+            if app_cmd_id:
+                try:
+                    # Quickly test if the comment still exists
+                    _ = gh(f"repos/{REPO}/issues/comments/{app_cmd_id}", "--jq", ".id")
+                except subprocess.CalledProcessError:
+                    log(f"App command comment {app_cmd_id} disappeared – resetting.")
+                    app_cmd_id = None
+
             if not app_cmd_id:
                 time.sleep(COMM_INTERVAL * slow_mode)
                 allc = get_all_comments(REPO, ISSUE_NUMBER)
                 app_c = find_marker_comment(allc, APP_COMMAND_MARKER)
-                if app_c: app_cmd_id = app_c["id"]; log(f"App command comment appeared: {app_cmd_id}")
+                if app_c: app_cmd_id = app_c["id"]; log(f"Re‑found app command comment: {app_cmd_id}")
+                else:
+                    # Try creating it if missing (app may need it)
+                    try:
+                        app_cmd_id = issue_comment(REPO, ISSUE_NUMBER, "## App Commands\n")
+                        log(f"Created new app command comment: {app_cmd_id}")
+                    except Exception as ce:
+                        log(f"Could not create app command comment: {ce}")
                 continue
 
+            # ── Read the comment body ──
             app_body = gh(f"repos/{REPO}/issues/comments/{app_cmd_id}", "--jq", ".body")
             if not app_body: time.sleep(COMM_INTERVAL * slow_mode); continue
             lines = app_body.strip().splitlines()
@@ -516,7 +523,7 @@ def main():
             response_comment_id = publish_reports(response_comment_id)
             if should_exit:
                 log("Exit command received – saving profile cache before exit...")
-                save_profile()          # ensure latest browser state is saved
+                save_profile()
                 time.sleep(1)
                 response_comment_id = publish_reports(response_comment_id)
                 ss("final", push=True)
@@ -543,7 +550,7 @@ if __name__ == "__main__":
         _profile_save_stop.set()
         _screenshot_stop.set()
         _url_monitor_stop.set()
-        save_profile()    # final save on any exit
+        save_profile()
         push_logs()
         _log_closed = True
         try: _logfile.close()
