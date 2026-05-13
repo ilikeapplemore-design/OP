@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # ==============================================================================
-# command_mouse_keyboard.py – Version 39.15.0
+# command_mouse_keyboard.py – Version 39.15.1
+#   - Log file writes are atomic and never crash the agent
+#   - Screenshot worker is monitored and auto‑restarted on failure
 #   - Profile cache split into 45 MB chunks (GitHub‑safe)
-#   - Screenshot pushes are independent; cache push failures don’t block them
-#   - All output duplicated to log file
 # ==============================================================================
 import os, time, subprocess, hashlib, sys, base64, json, random, threading, traceback, io, shutil, tarfile, glob, re
 from datetime import datetime, timezone
@@ -52,37 +52,36 @@ from agent_state import (
     _perform_human_click_at, _try_gemini_click
 )
 
-# ---------- Redirect stdout/stderr to log file ----------
+# ---------- Logging – robust file writer (never crashes) ----------
 LOG_FILENAME = "logs/command_mouse_keyboard.log"
 os.makedirs("logs", exist_ok=True)
 
-_logfile = open(LOG_FILENAME, "w", encoding="utf-8")
+_logfile = open(LOG_FILENAME, "a", encoding="utf-8")  # append mode for resilience
+_log_lock = threading.Lock()          # ensure writes from multiple threads are safe
 _log_closed = False
 
-class TeeWriter:
-    def __init__(self, original, log_f):
-        self.original = original
-        self.log_f = log_f
-    def write(self, data):
-        self.original.write(data)
-        self.original.flush()
-        self.log_f.write(data)
-        self.log_f.flush()
-    def flush(self):
-        self.original.flush()
-        self.log_f.flush()
-
-sys.stdout = TeeWriter(sys.stdout, _logfile)
-sys.stderr = TeeWriter(sys.stderr, _logfile)
+def safe_log_write(message: str) -> None:
+    """Write a message to the log file and flush. Swallows all errors."""
+    global _log_closed
+    if _log_closed:
+        return
+    try:
+        with _log_lock:
+            _logfile.write(message + "\n")
+            _logfile.flush()
+    except Exception:
+        pass
 
 def echo(msg: str) -> None:
+    # Print to original stdout (still visible in workflow output) AND write to log file
     print(msg, flush=True)
+    safe_log_write(msg)
 
 def log(msg: str) -> None:
     now = datetime.now().strftime("%H:%M:%S")
     echo(f"[{now}] {msg}")
 
-echo(f"{'='*60}\n  Remote Control v39.15.0 started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}\n{'='*60}")
+echo(f"{'='*60}\n  Remote Control v39.15.1 started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}\n{'='*60}")
 os.makedirs("screenshots", exist_ok=True)
 
 COMM_INTERVAL = 5.0
@@ -104,7 +103,7 @@ def git_run(cmd, **kwargs):
 def git_push_with_retry() -> bool:
     for attempt in range(3):
         try:
-            result = git_run(["git","push"], check=True, capture_output=True, text=True)
+            git_run(["git","push"], check=True, capture_output=True, text=True)
             return True
         except subprocess.CalledProcessError as e:
             log(f"Git push attempt {attempt+1} failed: {e.stderr.strip() if e.stderr else 'unknown'}")
@@ -117,7 +116,7 @@ def git_push_with_retry() -> bool:
 # ---------- Profile cache (chunked) ----------
 PROFILE_DIR = "/tmp/chrome_profile"
 CACHE_DIR = ".profile_cache"
-CHUNK_SIZE = 45 * 1024 * 1024  # 45 MB per chunk (safe under 100 MB)
+CHUNK_SIZE = 45 * 1024 * 1024
 ENCRYPTION_KEY = None
 try:
     KEY = os.environ["KEY"]
@@ -129,13 +128,11 @@ except Exception as e:
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 def load_profile():
-    """Reassemble chunks, decrypt, extract. Return True on success."""
     chunks = sorted(glob.glob(os.path.join(CACHE_DIR, "profile.enc.part*")))
     if not chunks:
         log("No profile cache chunks found.")
         return False
     try:
-        # Reassemble
         buf = io.BytesIO()
         for path in chunks:
             with open(path, "rb") as f:
@@ -157,19 +154,15 @@ def load_profile():
         return False
 
 def save_profile():
-    """Encrypt and write as 45 MB chunks, then commit & push only the chunks."""
     try:
-        # Create tar.gz in memory
         buf = io.BytesIO()
         with tarfile.open(fileobj=buf, mode="w:gz") as tar:
             tar.add(PROFILE_DIR, arcname="chrome_profile")
         encrypted = Fernet(ENCRYPTION_KEY).encrypt(buf.getvalue())
 
-        # Remove old chunks
         for old in glob.glob(os.path.join(CACHE_DIR, "profile.enc.part*")):
             os.remove(old)
 
-        # Write new chunks
         for i in range(0, len(encrypted), CHUNK_SIZE):
             chunk_data = encrypted[i:i+CHUNK_SIZE]
             part_name = f"profile.enc.part{i//CHUNK_SIZE:04d}"
@@ -177,13 +170,12 @@ def save_profile():
                 f.write(chunk_data)
         log(f"Profile cache saved in {len(encrypted)//CHUNK_SIZE+1} chunks.")
 
-        # Git add & commit only the cache directory
         git_run(["git", "add", CACHE_DIR], check=True, capture_output=True)
         try:
             git_run(["git", "diff", "--cached", "--quiet"], check=True, capture_output=True)
         except subprocess.CalledProcessError:
             git_run(["git", "commit", "-m", "Update profile cache chunks"], check=True, capture_output=True)
-            git_push_with_retry()   # push attempt; failure is logged but not fatal
+            git_push_with_retry()
     except Exception as e:
         log(f"ERROR saving profile cache: {e}")
 
@@ -264,6 +256,7 @@ def ss(desc="screenshot", push=True, response_suffix=""):
     now = datetime.now().strftime("%H%M%S")
     sfx = re.sub(r'[^a-zA-Z0-9 _\-.(),]', '', response_suffix)[:60] if response_suffix else ""
     fname = f"screenshots/{counter[0]:03d}_{now}_{desc}_{sfx}.png" if sfx else f"screenshots/{counter[0]:03d}_{now}_{desc}.png"
+    log(f"Taking screenshot: {fname}")
     driver.save_screenshot(fname)
     try:
         img = Image.open(fname); draw = ImageDraw.Draw(img)
@@ -289,7 +282,7 @@ def ss(desc="screenshot", push=True, response_suffix=""):
                 log(f"Pushed {fname}")
             else:
                 log(f"ERROR: Failed to push {fname}")
-        # Purge old screenshots (this may fail if repo is in bad state; ignore)
+        # Purge old screenshots (may fail; ignore)
         try:
             purge_old_screenshots(os.path.basename(fname))
         except Exception: pass
@@ -314,8 +307,14 @@ def purge_old_screenshots(keep_filename):
     except Exception as e:
         log(f"Purge warning: {e}")
 
+# ---------- Screenshot worker with auto‑restart ----------
 _screenshot_stop = threading.Event()
+_screenshot_thread = None
+_screenshot_worker_running = False
+
 def screenshot_worker():
+    global _screenshot_worker_running
+    _screenshot_worker_running = True
     while not _screenshot_stop.is_set():
         try:
             time.sleep(2)
@@ -330,10 +329,30 @@ def screenshot_worker():
                 elapsed = time.time() - start
                 _screenshot_stop.wait(max(0, COMM_INTERVAL * slow_mode - elapsed))
         except Exception as outer_e:
-            log(f"Screenshot worker crashed: {outer_e}")
+            log(f"Screenshot worker crashed: {outer_e}. Restarting in 5s...")
             _screenshot_stop.wait(5)
+    _screenshot_worker_running = False
 
-threading.Thread(target=screenshot_worker, daemon=True).start()
+def start_screenshot_worker():
+    global _screenshot_thread
+    if _screenshot_thread and _screenshot_thread.is_alive():
+        return
+    _screenshot_stop.clear()
+    _screenshot_thread = threading.Thread(target=screenshot_worker, daemon=True)
+    _screenshot_thread.start()
+    log("Screenshot worker started.")
+
+def monitor_screenshot_worker():
+    """Watchdog that restarts the screenshot worker if it dies unexpectedly."""
+    while not _screenshot_stop.is_set():
+        time.sleep(10)
+        if not _screenshot_thread or not _screenshot_thread.is_alive():
+            log("Screenshot worker is dead! Restarting...")
+            start_screenshot_worker()
+
+# Start screenshot worker and its watchdog
+start_screenshot_worker()
+threading.Thread(target=monitor_screenshot_worker, daemon=True).start()
 
 # ---------- GitHub basics ----------
 ISSUE_NUMBER = os.environ.get("ISSUE_NUMBER","4").strip()
