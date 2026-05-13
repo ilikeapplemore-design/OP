@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # ==============================================================================
-# command_mouse_keyboard.py – Version 39.15.1
-#   - Log file writes are atomic and never crash the agent
-#   - Screenshot worker is monitored and auto‑restarted on failure
+# command_mouse_keyboard.py – Version 39.16.0
+#   - No automatic periodic cache saves (only manual "save" command or exit)
+#   - Screenshot worker with watchdog, robust logging
 #   - Profile cache split into 45 MB chunks (GitHub‑safe)
 # ==============================================================================
 import os, time, subprocess, hashlib, sys, base64, json, random, threading, traceback, io, shutil, tarfile, glob, re
@@ -81,7 +81,7 @@ def log(msg: str) -> None:
     now = datetime.now().strftime("%H:%M:%S")
     echo(f"[{now}] {msg}")
 
-echo(f"{'='*60}\n  Remote Control v39.15.1 started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}\n{'='*60}")
+echo(f"{'='*60}\n  Remote Control v39.16.0 started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}\n{'='*60}")
 os.makedirs("screenshots", exist_ok=True)
 
 COMM_INTERVAL = 5.0
@@ -113,7 +113,7 @@ def git_push_with_retry() -> bool:
                 except Exception: pass
     return False
 
-# ---------- Profile cache (chunked) ----------
+# ---------- Profile cache (chunked, manual save only) ----------
 PROFILE_DIR = "/tmp/chrome_profile"
 CACHE_DIR = ".profile_cache"
 CHUNK_SIZE = 45 * 1024 * 1024
@@ -154,15 +154,19 @@ def load_profile():
         return False
 
 def save_profile():
+    """Encrypt profile, split into chunks, commit and push. Called on 'save' or exit."""
+    os.makedirs(CACHE_DIR, exist_ok=True)
     try:
         buf = io.BytesIO()
         with tarfile.open(fileobj=buf, mode="w:gz") as tar:
             tar.add(PROFILE_DIR, arcname="chrome_profile")
         encrypted = Fernet(ENCRYPTION_KEY).encrypt(buf.getvalue())
 
+        # Remove old chunks
         for old in glob.glob(os.path.join(CACHE_DIR, "profile.enc.part*")):
             os.remove(old)
 
+        # Write new chunks
         for i in range(0, len(encrypted), CHUNK_SIZE):
             chunk_data = encrypted[i:i+CHUNK_SIZE]
             part_name = f"profile.enc.part{i//CHUNK_SIZE:04d}"
@@ -175,7 +179,10 @@ def save_profile():
             git_run(["git", "diff", "--cached", "--quiet"], check=True, capture_output=True)
         except subprocess.CalledProcessError:
             git_run(["git", "commit", "-m", "Update profile cache chunks"], check=True, capture_output=True)
-            git_push_with_retry()
+            if git_push_with_retry():
+                log("Profile cache pushed to remote.")
+            else:
+                log("WARNING: Profile cache push failed (local copy saved).")
     except Exception as e:
         log(f"ERROR saving profile cache: {e}")
 
@@ -184,15 +191,7 @@ if load_profile():
 else:
     log("⚠️ Starting without saved login data.")
 
-# ---------- Periodic saver ----------
-_profile_save_stop = threading.Event()
-def periodic_save_worker():
-    while not _profile_save_stop.is_set():
-        _profile_save_stop.wait(300)
-        if not _profile_save_stop.is_set():
-            log("Periodic profile save triggered.")
-            save_profile()
-threading.Thread(target=periodic_save_worker, daemon=True).start()
+# (No periodic save worker – cache saved only on 'save' command or exit)
 
 # ---------- Browser setup ----------
 DOWNLOAD_DIR = "/home/runner/downloads"
@@ -569,7 +568,6 @@ def main():
                 time.sleep(1)
                 response_comment_id = publish_reports(response_comment_id)
                 ss("final", push=True)
-                _profile_save_stop.set()
                 _screenshot_stop.set()
                 _url_monitor_stop.set()
                 driver.quit(); display.stop()
@@ -589,7 +587,6 @@ if __name__ == "__main__":
         log(f"FATAL: {ex}\n{traceback.format_exc()}")
         push_logs()
     finally:
-        _profile_save_stop.set()
         _screenshot_stop.set()
         _url_monitor_stop.set()
         save_profile()
