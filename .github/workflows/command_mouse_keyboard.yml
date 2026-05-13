@@ -1,5 +1,5 @@
 # ==============================================================================
-# command_mouse_keyboard.yml – version 35.7 (rolling caches, no cache actions)
+# command_mouse_keyboard.yml – version 36.0 (rolling caches, encrypted with KEY)
 # ==============================================================================
 name: Remote Mouse & Keyboard (Full Command Set + File I/O)
 
