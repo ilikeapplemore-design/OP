@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 # ==============================================================================
-# command_mouse_keyboard.py – Version 39.14.3
-#   - Logs every screenshot creation and push result
-#   - Prints git push error details when push fails
-#   - Stage monitor no longer fires multiple start events
-#   - All output redirected to log file (including crash dumps)
+# command_mouse_keyboard.py – Version 39.15.0
+#   - Profile cache split into 45 MB chunks (GitHub‑safe)
+#   - Screenshot pushes are independent; cache push failures don’t block them
+#   - All output duplicated to log file
 # ==============================================================================
 import os, time, subprocess, hashlib, sys, base64, json, random, threading, traceback, io, shutil, tarfile, glob, re
 from datetime import datetime, timezone
@@ -83,7 +82,7 @@ def log(msg: str) -> None:
     now = datetime.now().strftime("%H:%M:%S")
     echo(f"[{now}] {msg}")
 
-echo(f"{'='*60}\n  Remote Control v39.14.3 started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}\n{'='*60}")
+echo(f"{'='*60}\n  Remote Control v39.15.0 started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}\n{'='*60}")
 os.makedirs("screenshots", exist_ok=True)
 
 COMM_INTERVAL = 5.0
@@ -103,21 +102,22 @@ def git_run(cmd, **kwargs):
         return subprocess.run(cmd, **kwargs)
 
 def git_push_with_retry() -> bool:
-    for attempt in range(5):
+    for attempt in range(3):
         try:
             result = git_run(["git","push"], check=True, capture_output=True, text=True)
             return True
         except subprocess.CalledProcessError as e:
-            log(f"Git push attempt {attempt+1} failed: {e.stderr.strip() if e.stderr else 'unknown error'}")
-            if attempt < 4:
+            log(f"Git push attempt {attempt+1} failed: {e.stderr.strip() if e.stderr else 'unknown'}")
+            if attempt < 2:
                 time.sleep(2 + random.random()*3)
                 try: git_run(["git","pull","--rebase"], check=True, capture_output=True)
                 except Exception: pass
     return False
 
-# ---------- Persistent encrypted profile cache ----------
+# ---------- Profile cache (chunked) ----------
 PROFILE_DIR = "/tmp/chrome_profile"
-PROFILE_CACHE_FILE = ".profile_cache/profile.enc"
+CACHE_DIR = ".profile_cache"
+CHUNK_SIZE = 45 * 1024 * 1024  # 45 MB per chunk (safe under 100 MB)
 ENCRYPTION_KEY = None
 try:
     KEY = os.environ["KEY"]
@@ -126,48 +126,64 @@ except Exception as e:
     log(f"PROFILE KEY ERROR: {e}")
     raise
 
-os.makedirs(os.path.dirname(PROFILE_CACHE_FILE), exist_ok=True)
+os.makedirs(CACHE_DIR, exist_ok=True)
 
 def load_profile():
-    if not os.path.exists(PROFILE_CACHE_FILE):
-        log("No profile cache file found – starting without login data.")
+    """Reassemble chunks, decrypt, extract. Return True on success."""
+    chunks = sorted(glob.glob(os.path.join(CACHE_DIR, "profile.enc.part*")))
+    if not chunks:
+        log("No profile cache chunks found.")
         return False
     try:
-        with open(PROFILE_CACHE_FILE, "rb") as f:
-            encrypted = f.read()
+        # Reassemble
+        buf = io.BytesIO()
+        for path in chunks:
+            with open(path, "rb") as f:
+                buf.write(f.read())
+        encrypted = buf.getvalue()
         decrypted = Fernet(ENCRYPTION_KEY).decrypt(encrypted)
         shutil.rmtree(PROFILE_DIR, ignore_errors=True)
-        buf = io.BytesIO(decrypted)
-        with tarfile.open(fileobj=buf, mode='r:gz') as tar:
+        buf2 = io.BytesIO(decrypted)
+        with tarfile.open(fileobj=buf2, mode='r:gz') as tar:
             tar.extractall('/tmp')
-        log("Profile cache loaded and decrypted successfully.")
+        log("Profile cache loaded (chunked).")
         return True
     except InvalidToken:
-        log("ERROR: Profile cache corrupted. Starting fresh.")
-        os.remove(PROFILE_CACHE_FILE)
+        log("ERROR: Profile cache corrupted – starting fresh.")
+        for p in chunks: os.remove(p)
         return False
     except Exception as e:
         log(f"ERROR loading profile cache: {e}")
         return False
 
 def save_profile():
-    os.makedirs(os.path.dirname(PROFILE_CACHE_FILE), exist_ok=True)
+    """Encrypt and write as 45 MB chunks, then commit & push only the chunks."""
     try:
+        # Create tar.gz in memory
         buf = io.BytesIO()
         with tarfile.open(fileobj=buf, mode="w:gz") as tar:
             tar.add(PROFILE_DIR, arcname="chrome_profile")
         encrypted = Fernet(ENCRYPTION_KEY).encrypt(buf.getvalue())
-        with open(PROFILE_CACHE_FILE, "wb") as out:
-            out.write(encrypted)
-        log(f"Profile cache saved.")
-        git_run(["git","add",PROFILE_CACHE_FILE], check=True, capture_output=True)
-        try: git_run(["git","diff","--cached","--quiet"], check=True, capture_output=True)
+
+        # Remove old chunks
+        for old in glob.glob(os.path.join(CACHE_DIR, "profile.enc.part*")):
+            os.remove(old)
+
+        # Write new chunks
+        for i in range(0, len(encrypted), CHUNK_SIZE):
+            chunk_data = encrypted[i:i+CHUNK_SIZE]
+            part_name = f"profile.enc.part{i//CHUNK_SIZE:04d}"
+            with open(os.path.join(CACHE_DIR, part_name), "wb") as f:
+                f.write(chunk_data)
+        log(f"Profile cache saved in {len(encrypted)//CHUNK_SIZE+1} chunks.")
+
+        # Git add & commit only the cache directory
+        git_run(["git", "add", CACHE_DIR], check=True, capture_output=True)
+        try:
+            git_run(["git", "diff", "--cached", "--quiet"], check=True, capture_output=True)
         except subprocess.CalledProcessError:
-            git_run(["git","commit","-m","Update profile cache"], check=True, capture_output=True)
-            if git_push_with_retry():
-                log("Profile cache pushed.")
-            else:
-                log("WARNING: Profile cache push failed.")
+            git_run(["git", "commit", "-m", "Update profile cache chunks"], check=True, capture_output=True)
+            git_push_with_retry()   # push attempt; failure is logged but not fatal
     except Exception as e:
         log(f"ERROR saving profile cache: {e}")
 
@@ -176,7 +192,7 @@ if load_profile():
 else:
     log("⚠️ Starting without saved login data.")
 
-# ---------- Periodic profile saver ----------
+# ---------- Periodic saver ----------
 _profile_save_stop = threading.Event()
 def periodic_save_worker():
     while not _profile_save_stop.is_set():
@@ -186,7 +202,7 @@ def periodic_save_worker():
             save_profile()
 threading.Thread(target=periodic_save_worker, daemon=True).start()
 
-# ---------- Browser + CDP setup ----------
+# ---------- Browser setup ----------
 DOWNLOAD_DIR = "/home/runner/downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 try:
@@ -248,7 +264,6 @@ def ss(desc="screenshot", push=True, response_suffix=""):
     now = datetime.now().strftime("%H%M%S")
     sfx = re.sub(r'[^a-zA-Z0-9 _\-.(),]', '', response_suffix)[:60] if response_suffix else ""
     fname = f"screenshots/{counter[0]:03d}_{now}_{desc}_{sfx}.png" if sfx else f"screenshots/{counter[0]:03d}_{now}_{desc}.png"
-    log(f"Taking screenshot: {fname}")
     driver.save_screenshot(fname)
     try:
         img = Image.open(fname); draw = ImageDraw.Draw(img)
@@ -265,19 +280,22 @@ def ss(desc="screenshot", push=True, response_suffix=""):
         try: git_run(["git","pull","--rebase"], check=True, capture_output=True)
         except Exception: pass
         git_run(["git","stash","pop"], capture_output=True)
+        # Add only the screenshot and log – NOT the cache files
         git_run(["git","add",fname,LOG_FILENAME], check=True, capture_output=True)
         try: git_run(["git","diff","--cached","--quiet"], check=True, capture_output=True)
         except subprocess.CalledProcessError:
             git_run(["git","commit","-m",f"Screenshot {fname}"], check=True, capture_output=True)
             if git_push_with_retry():
-                log(f"Pushed: {fname}")
+                log(f"Pushed {fname}")
             else:
                 log(f"ERROR: Failed to push {fname}")
-        # purge old only if push likely succeeded (folder exists)
-        if os.path.exists(fname):
+        # Purge old screenshots (this may fail if repo is in bad state; ignore)
+        try:
             purge_old_screenshots(os.path.basename(fname))
+        except Exception: pass
     except Exception as e:
         log(f"Screenshot git error: {e}")
+    return fname
 
 def purge_old_screenshots(keep_filename):
     try:
@@ -315,12 +333,7 @@ def screenshot_worker():
             log(f"Screenshot worker crashed: {outer_e}")
             _screenshot_stop.wait(5)
 
-def start_screenshot_worker():
-    t = threading.Thread(target=screenshot_worker, daemon=True)
-    t.start()
-    return t
-
-screenshot_thread = start_screenshot_worker()
+threading.Thread(target=screenshot_worker, daemon=True).start()
 
 # ---------- GitHub basics ----------
 ISSUE_NUMBER = os.environ.get("ISSUE_NUMBER","4").strip()
@@ -344,7 +357,7 @@ def smart_edit_comment(comment_id, new_body):
             return True
         except subprocess.CalledProcessError:
             if attempt == 0:
-                log("Edit rate-limited, retrying in 2s...")
+                log("Edit rate‑limited, retrying in 2s...")
                 time.sleep(2)
             else:
                 log("Edit failed after retry.")
@@ -384,12 +397,8 @@ def main():
         raise
 
     resp_comment = find_marker_comment(all_comments, RESPONSE_MARKER)
-    if resp_comment:
-        response_comment_id = resp_comment["id"]
-        log(f"Found response comment {response_comment_id}")
-    else:
-        response_comment_id = issue_comment(REPO, ISSUE_NUMBER, RESPONSE_MARKER+"\n")
-        log(f"Created response comment {response_comment_id}")
+    if resp_comment: response_comment_id = resp_comment["id"]; log(f"Found response comment {response_comment_id}")
+    else: response_comment_id = issue_comment(REPO, ISSUE_NUMBER, RESPONSE_MARKER+"\n"); log(f"Created response comment {response_comment_id}")
 
     app_cmd = find_marker_comment(all_comments, APP_COMMAND_MARKER)
     app_cmd_id = app_cmd["id"] if app_cmd else None
@@ -402,9 +411,7 @@ def main():
     log("Old comments cleaned."); push_logs()
 
     if app_cmd_id:
-        try:
-            edit_comment(REPO, app_cmd_id, "## App Commands\n")
-            log("App command comment blanked.")
+        try: edit_comment(REPO, app_cmd_id, "## App Commands\n"); log("App command comment blanked.")
         except Exception as e: log(f"Could not blank: {e}")
 
     executed_cache = {}; unsent_reports = []; exec_queue = ExecutionQueue()
@@ -441,8 +448,7 @@ def main():
 
         try:
             if app_cmd_id:
-                try:
-                    _ = gh(f"repos/{REPO}/issues/comments/{app_cmd_id}", "--jq", ".id")
+                try: _ = gh(f"repos/{REPO}/issues/comments/{app_cmd_id}", "--jq", ".id")
                 except subprocess.CalledProcessError:
                     log(f"App command comment {app_cmd_id} vanished – resetting.")
                     app_cmd_id = None
