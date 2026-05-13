@@ -1,0 +1,69 @@
+
+Trying simple download: https://international-gfe.download.nvidia.com/Windows/582.28/582.28-notebook-win10-win11-64bit-international-dch-whql.exe
+✓ Downloaded: 582.28-notebook-win10-win11-64bit-international-dch-whql.exe (856 MB)
+Trying simple download: https://go.microsoft.com/fwlink/?LinkID=2093437
+✓ Downloaded: downloaded_file_1777888451.bin (188 MB)
+No URLs required browser fallback.
+[2026-05-04 09:54:15] Splitting 2 large file(s) using chunker.py
+[2026-05-04 09:54:15] Running: python3 chunker.py --files Download/582.28-notebook-win10-win11-64bit-international-dch-whql.exe Download/downloaded_file_1777888451.bin --output-dir Download --chunk-size 20
+[2026-05-04 09:54:15] Uploading chunks and reassemble.bat
+[2026-05-04 09:54:15] Uploading 582.28-notebook-win10-win11-64bit-international-dch-whql.exe.part0000
+[2026-05-04 09:54:21] Uploading 582.28-notebook-win10-win11-64bit-international-dch-whql.exe.part0001
+[2026-05-04 09:54:25] Uploading 582.28-notebook-win10-win11-64bit-international-dch-whql.exe.part0002
+[2026-05-04 09:54:30] Uploading 582.28-notebook-win10-win11-64bit-international-dch-whql.exe.part0003
+[2026-05-04 09:54:34] Uploading 582.28-notebook-win10-win11-64bit-international-dch-whql.exe.part0004
+[2026-05-04 09:54:38] Uploading 582.28-notebook-win10-win11-64bit-international-dch-whql.exe.part0005
+[2026-05-04 09:54:43] Uploading 582.28-notebook-win10-win11-64bit-international-dch-whql.exe.part0006
+[2026-05-04 09:54:47] Uploading 582.28-notebook-win10-win11-64bit-international-dch-whql.exe.part0007
+[2026-05-04 09:54:52] Uploading 582.28-notebook-win10-win11-64bit-international-dch-whql.exe.part0008
+[2026-05-04 09:54:57] Uploading 582.28-notebook-win10-win11-64bit-international-dch-whql.exe.part0009
+[2026-05-04 09:55:01] Uploading 582.28-notebook-win10-win11-64bit-international-dch-whql.exe.part0010
+[2026-05-04 09:55:06] Uploading 582.28-notebook-win10-win11-64bit-international-dch-whql.exe.part0011
+[2026-05-04 09:55:10] Uploading 582.28-notebook-win10-win11-64bit-international-dch-whql.exe.part0012
+[2026-05-04 09:55:20] Uploading 582.28-notebook-win10-win11-64bit-international-dch-whql.exe.part0013
+[2026-05-04 09:55:24] Uploading 582.28-notebook-win10-win11-64bit-international-dch-whql.exe.part0014
+[2026-05-04 09:55:29] Uploading 582.28-notebook-win10-win11-64bit-international-dch-whql.exe.part0015
+[2026-05-04 09:55:34] Uploading 582.28-notebook-win10-win11-64bit-international-dch-whql.exe.part0016
+[2026-05-04 09:55:38] Uploading 582.28-notebook-win10-win11-64bit-international-dch-whql.exe.part0017
+[2026-05-04 09:55:43] Uploading 582.28-notebook-win10-win11-64bit-international-dch-whql.exe.part0018
+[2026-05-04 09:55:48] Uploading 582.28-notebook-win10-win11-64bit-international-dch-whql.exe.part0019
+[2026-05-04 09:55:52] Uploading 582.28-notebook-win10-win11-64bit-international-dch-whql.exe.part0020
+[2026-05-04 09:55:57] Uploading 582.28-notebook-win10-win11-64bit-international-dch-whql.exe.part0021
+[2026-05-04 09:56:01] Uploading 582.28-notebook-win10-win11-64bit-international-dch-whql.exe.part0022
+[2026-05-04 09:56:07] Uploading 582.28-notebook-win10-win11-64bit-international-dch-whql.exe.part0023
+[2026-05-04 09:56:11] Uploading 582.28-notebook-win10-win11-64bit-international-dch-whql.exe.part0024
+[2026-05-04 09:56:16] Uploading 582.28-notebook-win10-win11-64bit-international-dch-whql.exe.part0025
+[2026-05-04 09:56:21] Uploading 582.28-notebook-win10-win11-64bit-international-dch-whql.exe.part0026
+[2026-05-04 09:56:26] Uploading 582.28-notebook-win10-win11-64bit-international-dch-whql.exe.part0027
+[2026-05-04 09:56:31] Uploading 582.28-notebook-win10-win11-64bit-international-dch-whql.exe.part0028
+[2026-05-04 09:56:35] Uploading 582.28-notebook-win10-win11-64bit-international-dch-whql.exe.part0029
+[2026-05-04 09:56:40] Uploading 582.28-notebook-win10-win11-64bit-international-dch-whql.exe.part0030
+[2026-05-04 09:56:47] Retry 1 in 10 seconds...
+[2026-05-04 09:57:02] Uploading 582.28-notebook-win10-win11-64bit-international-dch-whql.exe.part0031
+[2026-05-04 09:57:06] Uploading 582.28-notebook-win10-win11-64bit-international-dch-whql.exe.part0032
+[2026-05-04 09:57:12] Uploading 582.28-notebook-win10-win11-64bit-international-dch-whql.exe.part0033
+[2026-05-04 09:57:16] Uploading 582.28-notebook-win10-win11-64bit-international-dch-whql.exe.part0034
+[2026-05-04 09:57:21] Uploading 582.28-notebook-win10-win11-64bit-international-dch-whql.exe.part0035
+[2026-05-04 09:57:25] Uploading 582.28-notebook-win10-win11-64bit-international-dch-whql.exe.part0036
+[2026-05-04 09:57:30] Uploading 582.28-notebook-win10-win11-64bit-international-dch-whql.exe.part0037
+[2026-05-04 09:57:34] Uploading 582.28-notebook-win10-win11-64bit-international-dch-whql.exe.part0038
+[2026-05-04 09:57:39] Uploading 582.28-notebook-win10-win11-64bit-international-dch-whql.exe.part0039
+[2026-05-04 09:57:43] Uploading 582.28-notebook-win10-win11-64bit-international-dch-whql.exe.part0040
+[2026-05-04 09:57:48] Uploading 582.28-notebook-win10-win11-64bit-international-dch-whql.exe.part0041
+[2026-05-04 09:57:53] Uploading 582.28-notebook-win10-win11-64bit-international-dch-whql.exe.part0042
+[2026-05-04 09:57:56] Uploading downloaded_file_1777888451.bin.part0000
+[2026-05-04 09:58:02] Uploading downloaded_file_1777888451.bin.part0001
+[2026-05-04 09:58:11] Retry 1 in 10 seconds...
+[2026-05-04 09:58:25] Uploading downloaded_file_1777888451.bin.part0002
+[2026-05-04 09:58:31] Uploading downloaded_file_1777888451.bin.part0003
+[2026-05-04 09:58:37] Uploading downloaded_file_1777888451.bin.part0004
+[2026-05-04 09:58:43] Uploading downloaded_file_1777888451.bin.part0005
+[2026-05-04 09:58:50] Uploading downloaded_file_1777888451.bin.part0006
+[2026-05-04 09:58:58] Retry 1 in 10 seconds...
+[2026-05-04 09:59:12] Uploading downloaded_file_1777888451.bin.part0007
+[2026-05-04 09:59:19] Uploading downloaded_file_1777888451.bin.part0008
+[2026-05-04 09:59:27] Retry 1 in 10 seconds...
+[2026-05-04 09:59:47] Retry 2 in 10 seconds...
+[2026-05-04 10:00:01] Uploading downloaded_file_1777888451.bin.part0009
+[2026-05-04 10:00:04] Uploading reassemble.bat
+[2026-05-04 10:00:06] ✅ Processing complete.

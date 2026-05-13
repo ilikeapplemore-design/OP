@@ -1,0 +1,121 @@
+# ==============================================================================
+# command_mouse_keyboard.yml – version 35.7 (rolling caches, no cache actions)
+# ==============================================================================
+name: Remote Mouse & Keyboard (Full Command Set + File I/O)
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: 'GitHub Issue number (default 4)'
+        required: false
+        type: string
+        default: '4'
+      start_url:
+        description: 'Starting URL (default: https://studio.youtube.com)'
+        required: false
+        type: string
+        default: 'https://studio.youtube.com'
+
+jobs:
+  control:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+    env:
+      KEY: ${{ secrets.KEY }}
+      PASS: ${{ secrets.PASS }}
+      EMAIL: ${{ secrets.EMAIL }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      PYTHONUNBUFFERED: 1
+      SECRETS_TO_EXPOSE: "EMAIL,PASS,PHONE"
+      GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: "Clean start + create log directory"
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          rm -rf screenshots command_mouse_keyboard.log downloaded_chunks logs/command_mouse_keyboard.log
+          mkdir -p screenshots downloaded_chunks logs
+          git checkout --ours screenshots/ 2>/dev/null || true
+          git add -A && git commit -m "Clean start" || echo "Nothing to commit"
+          git pull --rebase && git push || echo "Push failed, continuing"
+
+      - name: "Setup Cloudflare WARP"
+        uses: viperadnan-git/setup-warp@v1
+        with:
+          mode: 'client'
+          stack: 'dual'
+          configure_docker: 'false'
+
+      - name: "Verify WARP"
+        run: |
+          curl -s https://www.cloudflare.com/cdn-cgi/trace | grep -E "warp|ip|loc"
+          echo "WARP is active"
+
+      - name: "Install system packages (incl. xvfb)"
+        run: |
+          echo "### Installing system packages ###" | tee -a logs/command_mouse_keyboard.log
+          sudo apt-get update -qq
+          sudo apt-get install -y wget gnupg python3-pip ffmpeg xclip xvfb 2>&1 \
+            | tee -a logs/command_mouse_keyboard.log
+          echo "### System packages done ###" | tee -a logs/command_mouse_keyboard.log
+
+      - name: "Add Google Chrome key"
+        run: |
+          echo "### Adding Chrome key ###" | tee -a logs/command_mouse_keyboard.log
+          wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub \
+            | sudo gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg 2>&1 \
+            | tee -a logs/command_mouse_keyboard.log
+          echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] \
+            http://dl.google.com/linux/chrome/deb/ stable main" \
+            | sudo tee /etc/apt/sources.list.d/google-chrome.list > /dev/null
+          echo "### Chrome key added ###" | tee -a logs/command_mouse_keyboard.log
+
+      - name: "Install Google Chrome"
+        run: |
+          echo "### Installing Chrome ###" | tee -a logs/command_mouse_keyboard.log
+          sudo apt-get update -qq
+          sudo apt-get install -y google-chrome-stable 2>&1 | tee -a logs/command_mouse_keyboard.log
+          echo "### Chrome installed ###" | tee -a logs/command_mouse_keyboard.log
+
+      - name: "Install Python packages (updated Selenium)"
+        run: |
+          echo "### Installing Python packages ###" | tee -a logs/command_mouse_keyboard.log
+          pip3 install --upgrade selenium webdriver-manager requests cryptography \
+                       Pillow pyperclip google-genai undetected-chromedriver \
+                       pyvirtualdisplay 2>&1 | tee -a logs/command_mouse_keyboard.log
+          echo "### Python packages done ###" | tee -a logs/command_mouse_keyboard.log
+
+      - name: "Push unified log after installations"
+        if: always()
+        run: |
+          git checkout --ours screenshots/ 2>/dev/null || true
+          git add logs/command_mouse_keyboard.log
+          if ! git diff --cached --quiet; then
+            git commit -m "Installation log (unified)"
+            git pull --rebase && git push || echo "Push failed"
+          fi
+
+      - name: "Agent"
+        timeout-minutes: 360
+        env:
+          ISSUE_NUMBER: ${{ github.event.inputs.issue_number }}
+          START_URL: ${{ github.event.inputs.start_url }}
+          PYTHONPATH: python
+        run: |
+          python3 python/command_mouse_keyboard.py 2>&1 | tee -a logs/command_mouse_keyboard.log
+
+      - name: "Push final logs"
+        if: always()
+        run: |
+          git checkout --ours screenshots/ 2>/dev/null || true
+          git add logs/command_mouse_keyboard.log
+          if ! git diff --cached --quiet; then
+            git commit -m "Agent run log"
+            git pull --rebase && git push || echo "Push failed"
+          fi
