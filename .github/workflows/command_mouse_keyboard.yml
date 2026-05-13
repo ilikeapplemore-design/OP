@@ -1,5 +1,5 @@
 # ==============================================================================
-# command_mouse_keyboard.yml – version 36.0 (rolling caches, encrypted with KEY)
+# command_mouse_keyboard.yml – version 36.1 (WARP caching for faster startup)
 # ==============================================================================
 name: Remote Mouse & Keyboard (Full Command Set + File I/O)
 
@@ -45,12 +45,29 @@ jobs:
           git add -A && git commit -m "Clean start" || echo "Nothing to commit"
           git pull --rebase && git push || echo "Push failed, continuing"
 
-      - name: "Setup Cloudflare WARP"
-        uses: viperadnan-git/setup-warp@v1
+      # ---------- WARP with caching ----------
+      - name: "Cache Cloudflare WARP package"
+        uses: actions/cache@v4
+        id: warp-cache
         with:
-          mode: 'client'
-          stack: 'dual'
-          configure_docker: 'false'
+          path: /tmp/warp-pkg
+          key: cloudflare-warp-${{ runner.os }}-${{ hashFiles('.github/workflows/command_mouse_keyboard.yml') }}
+
+      - name: "Download WARP (first time)"
+        if: steps.warp-cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y curl gnupg apt-transport-https
+          curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --yes --dearmor -o /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+          echo "deb [arch=amd64 signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
+          sudo apt-get update -qq
+          sudo apt-get install -y --download-only cloudflare-warp
+          mkdir -p /tmp/warp-pkg
+          cp /var/cache/apt/archives/cloudflare-warp*.deb /tmp/warp-pkg/
+
+      - name: "Install WARP (from cache)"
+        if: steps.warp-cache.outputs.cache-hit == 'true'
+        run: sudo dpkg -i /tmp/warp-pkg/cloudflare-warp*.deb
 
       - name: "Verify WARP"
         run: |
