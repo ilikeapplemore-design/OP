@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # ==============================================================================
-# command_handlers.py – Version 1.8.4 (always one selected file)
+# command_handlers.py – Version 1.8.5 (no file renaming, added 'save' command)
 # ==============================================================================
 import os, time, subprocess, glob, shutil, re, tempfile
 from uploader import reassemble
-from upload_handler import perform_upload, inject_selected_file
+from upload_handler import perform_upload
 from upload_injector import upload_to_youtube
 
 def _ensure_selection(_file_registry, _upload_file_paths):
@@ -40,7 +40,8 @@ def execute_one_command(
 ):
     result = ""
 
-    if cmd == "exit": result = "OK exit"
+    if cmd == "exit": 
+        result = "OK exit"
     elif cmd == "screenshot":
         if callable(ss):
             result = f"OK screenshot at ({cursor_x},{cursor_y})"
@@ -226,6 +227,8 @@ def execute_one_command(
         except Exception: result = "ERR invalid upload numbers"
     elif cmd == "savestate":
         save_profile(); result = "OK savestate"
+    elif cmd == "save":
+        save_profile(); result = "OK save"
     elif cmd == "setinterval":
         import sys
         main_mod = sys.modules.get("__main__")
