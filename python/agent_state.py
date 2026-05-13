@@ -175,6 +175,7 @@ def parse_single_command(raw: str):
     if lo in ("rightup","rightmouseup"): return ("rightup", None)
     if lo in ("middledown","middle mousedown"): return ("middledown", None)
     if lo in ("middleup","middle mouseup"): return ("middleup", None)
+    if lo == "save": return ("save", None)
     m = re.match(r'^moveby\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)$', lo)
     if m: return ("moveby", (int(float(m.group(1))), int(float(m.group(2)))))
     m = re.match(r'^\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)$', raw)
