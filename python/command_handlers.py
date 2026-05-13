@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ==============================================================================
-# command_handlers.py – Version 1.8.5 (no file renaming, added 'save' command)
+# command_handlers.py – Version 1.9.0 (force window size on tab switch)
 # ==============================================================================
 import os, time, subprocess, glob, shutil, re, tempfile
 from uploader import reassemble
@@ -194,11 +194,20 @@ def execute_one_command(
             if not handles: result = "ERR tabnumber: no window handles"
             elif 0 <= idx < len(handles):
                 driver.switch_to.window(handles[idx])
+                # Force this window to the standard viewport size
+                try:
+                    driver.set_window_size(W, H)
+                except Exception:
+                    pass
                 result = f"Switched to tab {idx+1}: {driver.title[:40]}"
             else:
                 time.sleep(0.5); handles = driver.window_handles
                 if 0 <= idx < len(handles):
                     driver.switch_to.window(handles[idx])
+                    try:
+                        driver.set_window_size(W, H)
+                    except Exception:
+                        pass
                     result = f"Switched to tab {idx+1}: {driver.title[:40]}"
                 else: result = "ERR: invalid tab number"
         except Exception as e: result = f"ERR tabnumber: {e}"
