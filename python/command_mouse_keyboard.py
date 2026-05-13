@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 # ==============================================================================
-# command_mouse_keyboard.py – Version 39.14.1
-#   - Always create .profile_cache directory before saving cache
-#   - Recover gracefully when the app-command comment disappears
+# command_mouse_keyboard.py – Version 39.14.2
+#   - Stdout/stderr redirected to log file for complete crash dumps
+#   - Fatal startup errors are logged before exit
+#   - Cache directory always created before write
+#   - Recovers from vanished app‑command comment
 # ==============================================================================
 import os, time, subprocess, hashlib, sys, base64, json, random, threading, traceback, io, shutil, tarfile, glob, re
 from datetime import datetime, timezone
@@ -51,9 +53,50 @@ from agent_state import (
     _perform_human_click_at, _try_gemini_click
 )
 
-def log(msg): default_log(msg)
+# ---------- Redirect all stdout/stderr to the log file (in addition to tee) ----------
+LOG_FILENAME = "logs/command_mouse_keyboard.log"
+os.makedirs("logs", exist_ok=True)
 
-# ---------- Global git lock (prevents concurrent git operations) ----------
+_logfile = open(LOG_FILENAME, "w", encoding="utf-8")
+_log_closed = False
+
+# Duplicate stdout/stderr to the log file and to the original streams
+class TeeWriter:
+    def __init__(self, original, log_f):
+        self.original = original
+        self.log_f = log_f
+    def write(self, data):
+        self.original.write(data)
+        self.original.flush()
+        self.log_f.write(data)
+        self.log_f.flush()
+    def flush(self):
+        self.original.flush()
+        self.log_f.flush()
+
+sys.stdout = TeeWriter(sys.stdout, _logfile)
+sys.stderr = TeeWriter(sys.stderr, _logfile)
+
+def echo(msg: str) -> None:
+    """Write a line to the log file and print it (which now goes to both)."""
+    if not _log_closed:
+        print(msg, flush=True)
+    else:
+        # Fallback: original stdout (already replaced, so this still goes to log)
+        print(msg, flush=True)
+
+def log(msg: str) -> None:
+    now = datetime.now().strftime("%H:%M:%S")
+    echo(f"[{now}] {msg}")
+
+echo(f"{'='*60}\n  Remote Control v39.14.2 started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}\n{'='*60}")
+os.makedirs("screenshots", exist_ok=True)
+
+COMM_INTERVAL = 5.0
+slow_mode = 1
+last_command_time = time.time()
+
+# ---------- Global git lock ----------
 _git_lock = threading.Lock()
 def git_cleanup():
     lock_file = ".git/index.lock"
@@ -65,7 +108,6 @@ def git_run(cmd, **kwargs):
         git_cleanup()
         return subprocess.run(cmd, **kwargs)
 
-# ---------- git_push_with_retry (shared with screenshot and cache) ----------
 def git_push_with_retry() -> bool:
     for attempt in range(5):
         try:
@@ -78,28 +120,7 @@ def git_push_with_retry() -> bool:
                 except Exception: pass
     return False
 
-# ---------- Logging ----------
-LOG_FILENAME = "logs/command_mouse_keyboard.log"
-os.makedirs("logs", exist_ok=True)
-_logfile = open(LOG_FILENAME, "w", encoding="utf-8")
-_log_closed = False
-def echo(msg: str) -> None:
-    if not _log_closed:
-        try: _logfile.write(msg + "\n"); _logfile.flush()
-        except Exception: pass
-    print(msg, flush=True)
-def log(msg: str) -> None:
-    now = datetime.now().strftime("%H:%M:%S")
-    echo(f"[{now}] {msg}")
-
-echo(f"{'='*60}\n  Remote Control v39.14.1 started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}\n{'='*60}")
-os.makedirs("screenshots", exist_ok=True)
-
-COMM_INTERVAL = 5.0
-slow_mode = 1
-last_command_time = time.time()
-
-# ---------- Persistent encrypted profile cache (single file in repo) ----------
+# ---------- Persistent encrypted profile cache ----------
 PROFILE_DIR = "/tmp/chrome_profile"
 PROFILE_CACHE_FILE = ".profile_cache/profile.enc"
 ENCRYPTION_KEY = None
@@ -110,11 +131,9 @@ except Exception as e:
     log(f"PROFILE KEY ERROR: {e}")
     raise
 
-# Ensure cache directory exists at startup
 os.makedirs(os.path.dirname(PROFILE_CACHE_FILE), exist_ok=True)
 
 def load_profile():
-    """Load and decrypt profile cache from the single file. Return True if success."""
     if not os.path.exists(PROFILE_CACHE_FILE):
         log("No profile cache file found – starting without login data.")
         return False
@@ -137,8 +156,6 @@ def load_profile():
         return False
 
 def save_profile():
-    """Tar+gz profile dir, encrypt, write to single cache file, commit, and push."""
-    # Ensure the parent directory exists before writing
     os.makedirs(os.path.dirname(PROFILE_CACHE_FILE), exist_ok=True)
     try:
         buf = io.BytesIO()
@@ -162,13 +179,12 @@ def save_profile():
     except Exception as e:
         log(f"ERROR saving profile cache: {e}")
 
-# ---------- Load profile at startup ----------
 if load_profile():
     log("✅ Profile cache successfully loaded.")
 else:
     log("⚠️ No valid profile cache – starting browser without saved login data.")
 
-# ---------- Periodic profile saver (every 5 minutes) ----------
+# ---------- Periodic profile saver ----------
 _profile_save_stop = threading.Event()
 def periodic_save_worker():
     while not _profile_save_stop.is_set():
@@ -232,7 +248,7 @@ if agent_state:
     agent_state.pyperclip = pyperclip
     agent_state.log = log
 
-# ---------- Screenshot with watchdog restart ----------
+# ---------- Screenshot ----------
 counter = [0]
 
 def purge_old_screenshots(keep_filename):
@@ -357,18 +373,30 @@ def main():
         agent_state._last_known_url = driver.current_url
         threading.Thread(target=url_monitor_worker, daemon=True).start()
         log("URL monitor and screenshot worker started")
-    except Exception as e: log(f"FATAL STARTUP ERROR – {e}"); push_logs(); raise
+    except Exception as e:
+        log(f"FATAL STARTUP ERROR – {e}")
+        log(traceback.format_exc())
+        push_logs()
+        raise   # re‑raise to be caught by the outer handler in __main__
 
     RESPONSE_MARKER = "## Remote Agent Responses"
     APP_COMMAND_MARKER = "## App Commands"
     try:
         all_comments = get_all_comments(REPO, ISSUE_NUMBER)
         log(f"Fetched {len(all_comments)} comments.")
-    except Exception as e: log(f"ERROR fetching comments: {e}"); push_logs(); raise
+    except Exception as e:
+        log(f"ERROR fetching comments: {e}")
+        log(traceback.format_exc())
+        push_logs()
+        raise
 
     resp_comment = find_marker_comment(all_comments, RESPONSE_MARKER)
-    if resp_comment: response_comment_id = resp_comment["id"]; log(f"Found response comment {response_comment_id}")
-    else: response_comment_id = issue_comment(REPO, ISSUE_NUMBER, RESPONSE_MARKER+"\n"); log(f"Created response comment {response_comment_id}")
+    if resp_comment:
+        response_comment_id = resp_comment["id"]
+        log(f"Found response comment {response_comment_id}")
+    else:
+        response_comment_id = issue_comment(REPO, ISSUE_NUMBER, RESPONSE_MARKER+"\n")
+        log(f"Created response comment {response_comment_id}")
 
     app_cmd = find_marker_comment(all_comments, APP_COMMAND_MARKER)
     app_cmd_id = app_cmd["id"] if app_cmd else None
@@ -422,7 +450,6 @@ def main():
             # ── Ensure we still have a valid app‑command comment ──
             if app_cmd_id:
                 try:
-                    # Quickly test if the comment still exists
                     _ = gh(f"repos/{REPO}/issues/comments/{app_cmd_id}", "--jq", ".id")
                 except subprocess.CalledProcessError:
                     log(f"App command comment {app_cmd_id} disappeared – resetting.")
@@ -432,9 +459,10 @@ def main():
                 time.sleep(COMM_INTERVAL * slow_mode)
                 allc = get_all_comments(REPO, ISSUE_NUMBER)
                 app_c = find_marker_comment(allc, APP_COMMAND_MARKER)
-                if app_c: app_cmd_id = app_c["id"]; log(f"Re‑found app command comment: {app_cmd_id}")
+                if app_c:
+                    app_cmd_id = app_c["id"]
+                    log(f"Re‑found app command comment: {app_cmd_id}")
                 else:
-                    # Try creating it if missing (app may need it)
                     try:
                         app_cmd_id = issue_comment(REPO, ISSUE_NUMBER, "## App Commands\n")
                         log(f"Created new app command comment: {app_cmd_id}")
@@ -542,7 +570,8 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except SystemExit: pass
+    except SystemExit:
+        pass
     except Exception as ex:
         log(f"FATAL: {ex}\n{traceback.format_exc()}")
         push_logs()
