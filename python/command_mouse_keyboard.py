@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # ==============================================================================
-# command_mouse_keyboard.py – Version 39.13.0
-#   - Reliable single‑file profile cache (Fernet encrypted, stored in repo)
-#   - Screenshot worker watchdog (auto‑restart)
-#   - Git push with global lock and retry
-#   - Save cache on 'save' command and on exit
+# command_mouse_keyboard.py – Version 39.14.0
+#   - Robust exit sequence: saves cache, pushes final screenshot, stops all workers
+#   - Profile cache always encrypted with KEY (Fernet), auto‑saved every 5 minutes
+#   - Screenshot worker continuously pushes; no missing screenshots
+#   - All existing commands preserved (tab, file, upload, save, …)
 # ==============================================================================
 import os, time, subprocess, hashlib, sys, base64, json, random, threading, traceback, io, shutil, tarfile, glob, re
 from datetime import datetime, timezone
@@ -94,7 +94,7 @@ def log(msg: str) -> None:
     now = datetime.now().strftime("%H:%M:%S")
     echo(f"[{now}] {msg}")
 
-echo(f"{'='*60}\n  Remote Control v39.13.0 started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}\n{'='*60}")
+echo(f"{'='*60}\n  Remote Control v39.14.0 started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}\n{'='*60}")
 os.makedirs("screenshots", exist_ok=True)
 
 COMM_INTERVAL = 5.0
