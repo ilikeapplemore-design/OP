@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ==============================================================================
-# agent_state.py – Version 1.0.4 (log helper added, file-report deduplication)
+# agent_state.py – Version 1.0.5 (humantype added, text/type removed)
 # ==============================================================================
 import os, time, re, glob, threading, traceback, random, base64
 from datetime import datetime
@@ -196,12 +196,9 @@ def parse_single_command(raw: str):
     if m: return ("key", m.group(1).strip())
     m = re.match(r'^combo:\s*(.+)\s*$', lo)
     if m: return ("combo", m.group(1).strip())
-    m = re.match(r'^text:\s*(.+)\s*$', lo)
-    if m: return ("text", m.group(1))
-    m = re.match(r'^type:\s*(.+)\s*$', lo)
-    if m: return ("text", m.group(1))
     if lo.startswith('secret:'): return ("secret", raw.split(':',1)[1].strip())
     if lo.startswith('decode:'): return ("decode", raw.split(':',1)[1].strip())
+    if lo.startswith('humantype:'): return ("humantype", raw.split(':',1)[1].strip())
     m = re.match(r'^navigate:\s*(.+)\s*$', lo)
     if m: return ("navigate", m.group(1).strip())
     m = re.match(r'^drag\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)$', lo)
@@ -228,7 +225,7 @@ def parse_single_command(raw: str):
 _file_registry = {}
 _previous_file_set = set()
 _upload_file_paths = []
-_last_reported_files_str = None   # deduplication
+_last_reported_files_str = None
 
 DOWNLOAD_DIR = ""   # set by main
 
@@ -319,3 +316,4 @@ def cull_expired_autonomous_reports():
     pending_autonomous_reports[:] = [r for r in pending_autonomous_reports if now - r["timestamp"] < AUTONOMOUS_TIMEOUT]
     if before > len(pending_autonomous_reports):
         log(f"Culled {before - len(pending_autonomous_reports)} expired autonomous reports.")
+        
